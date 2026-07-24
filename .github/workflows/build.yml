@@ -1,4 +1,4 @@
-name: Build & Test
+name: Build & Release
 
 on:
   push:
@@ -23,14 +23,28 @@ jobs:
       - name: Build Workspace (Windows)
         run: cargo build --release --workspace
 
+      - name: Package Release ZIP
+        shell: powershell
+        run: |
+          New-Item -ItemType Directory -Force -Path staging\icons
+          Copy-Item target\release\cozip.exe staging\
+          Copy-Item target\release\cozip_desktop.exe staging\
+          Copy-Item target\release\cozip_win_shell.dll staging\
+          Copy-Item target\release\cozip_win_uninstaller.exe staging\
+          if (Test-Path src\cozip_win_shell\icons) { Copy-Item src\cozip_win_shell\icons\* staging\icons\ }
+          Compress-Archive -Path staging\* -DestinationPath target\release\pack.zip -Force
+
       - name: Upload Windows Artifacts
         uses: actions/upload-artifact@v4
         with:
           name: cozip-windows-x64
           path: |
-            target/release/cozip.exe
+            target/release/cozip_win_installer.exe
+            target/release/cozip_win_uninstaller.exe
             target/release/cozip_desktop.exe
-            target/release/*.dll
+            target/release/cozip.exe
+            target/release/cozip_win_shell.dll
+            target/release/pack.zip
 
   build-linux:
     name: Build (Linux)
@@ -50,10 +64,10 @@ jobs:
         uses: Swatinem/rust-cache@v2
 
       - name: Build Workspace (Linux)
-        run: cargo build --release --workspace
+        run: cargo build --release --package cozip --package cozip_pdeflate --package cozip_deflate --package cozip_util --package cozip_desktop
 
       - name: Test Workspace (Linux)
-        run: cargo test --workspace
+        run: cargo test --package cozip --package cozip_pdeflate --package cozip_deflate --package cozip_util
 
       - name: Upload Linux Artifacts
         uses: actions/upload-artifact@v4

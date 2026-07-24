@@ -53,7 +53,8 @@ const DECOMP_ICON_PATH: &str = r"C:\Program Files\CoZip\icons\decomp.ico";
 const COZIP_FILE_PROG_ID: &str = "CoZip.Archive";
 const COZIP_UNINSTALL_REG_KEY: &str =
     r"Software\Microsoft\Windows\CurrentVersion\Uninstall\CoZip";
-const RELEASES_API_URL: &str = "https://api.github.com/repos/bea4dev/cozip/releases";
+const RELEASES_API_URL: &str = "https://api.github.com/repos/puyokura/cozip/releases";
+
 const RELEASE_ASSET_NAME: &str = "pack.zip";
 const DOWNLOAD_PROGRESS_END: u8 = 59;
 const EXTRACT_PROGRESS_END: u8 = 89;
