@@ -346,6 +346,12 @@ impl CozipDesktopApp {
         let extension = match format {
             ArchiveFormat::Zip => "zip",
             ArchiveFormat::Cozip => DEFAULT_COZIP_EXTENSION,
+            ArchiveFormat::Tar => "tar",
+            ArchiveFormat::TarGz => "tar.gz",
+            ArchiveFormat::TarBz2 => "tar.bz2",
+            ArchiveFormat::TarXz => "tar.xz",
+            ArchiveFormat::Rar => "rar",
+            ArchiveFormat::SevenZip => "7z",
         };
         let file_name = current_output
             .file_name()
@@ -601,6 +607,12 @@ impl CozipDesktopApp {
         let format_label = match plan.format {
             ArchiveFormat::Zip => "ZIP",
             ArchiveFormat::Cozip => "PDeflate",
+            ArchiveFormat::Tar => "TAR",
+            ArchiveFormat::TarGz => "TAR.GZ",
+            ArchiveFormat::TarBz2 => "TAR.BZ2",
+            ArchiveFormat::TarXz => "TAR.XZ",
+            ArchiveFormat::Rar => "RAR",
+            ArchiveFormat::SevenZip => "7Z",
         };
 
         let mut form = div()
@@ -753,6 +765,7 @@ impl CozipDesktopApp {
                         ),
                     ));
             }
+            _ => {}
         }
 
         form
@@ -857,6 +870,12 @@ impl CozipDesktopApp {
         let format_text: SharedString = match plan.format {
             ArchiveFormat::Zip => "zip".into(),
             ArchiveFormat::Cozip => "cozip".into(),
+            ArchiveFormat::Tar => "tar".into(),
+            ArchiveFormat::TarGz => "tar.gz".into(),
+            ArchiveFormat::TarBz2 => "tar.bz2".into(),
+            ArchiveFormat::TarXz => "tar.xz".into(),
+            ArchiveFormat::Rar => "rar".into(),
+            ArchiveFormat::SevenZip => "7z".into(),
         };
         panel(
             self.t("summary.compress"),
@@ -1385,6 +1404,7 @@ impl CozipDesktopApp {
             Some(DesktopCommand::Compress(plan)) => match plan.format {
                 ArchiveFormat::Zip => matches!(plan.zip_options.deflate_mode, ZipDeflateMode::Hybrid),
                 ArchiveFormat::Cozip => plan.pdeflate_options.gpu_compress_enabled,
+                _ => false,
             },
             Some(DesktopCommand::Extract(plan)) => {
                 plan.has_pdeflate_tasks() && plan.pdeflate_options.gpu_decompress_enabled

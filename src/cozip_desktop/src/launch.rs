@@ -40,6 +40,12 @@ pub enum InitialScreen {
 pub enum ArchiveFormat {
     Zip,
     Cozip,
+    Tar,
+    TarGz,
+    TarBz2,
+    TarXz,
+    Rar,
+    SevenZip,
 }
 
 #[derive(Clone, Debug)]
@@ -312,6 +318,12 @@ fn default_compress_output_path(
     let extension = match format {
         ArchiveFormat::Zip => "zip",
         ArchiveFormat::Cozip => DEFAULT_COZIP_EXTENSION,
+        ArchiveFormat::Tar => "tar",
+        ArchiveFormat::TarGz => "tar.gz",
+        ArchiveFormat::TarBz2 => "tar.bz2",
+        ArchiveFormat::TarXz => "tar.xz",
+        ArchiveFormat::Rar => "rar",
+        ArchiveFormat::SevenZip => "7z",
     };
 
     match mode {
@@ -497,6 +509,12 @@ fn build_extract_task(
     let archive_format = match info.format {
         CoZipArchiveFormat::Zip => ArchiveFormat::Zip,
         CoZipArchiveFormat::PDeflate => ArchiveFormat::Cozip,
+        CoZipArchiveFormat::Tar => ArchiveFormat::Tar,
+        CoZipArchiveFormat::TarGz => ArchiveFormat::TarGz,
+        CoZipArchiveFormat::TarBz2 => ArchiveFormat::TarBz2,
+        CoZipArchiveFormat::TarXz => ArchiveFormat::TarXz,
+        CoZipArchiveFormat::Rar => ArchiveFormat::Rar,
+        CoZipArchiveFormat::SevenZip => ArchiveFormat::SevenZip,
     };
     let stem = path
         .file_stem()
@@ -627,6 +645,7 @@ pub fn unique_path(candidate: PathBuf) -> PathBuf {
 pub fn cycle_archive_format(current: ArchiveFormat) -> ArchiveFormat {
     match current {
         ArchiveFormat::Zip => ArchiveFormat::Cozip,
-        ArchiveFormat::Cozip => ArchiveFormat::Zip,
+        _ => ArchiveFormat::Zip,
     }
 }
+

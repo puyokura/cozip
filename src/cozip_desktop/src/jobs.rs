@@ -151,15 +151,21 @@ fn run_extract(plan: ExtractPlan, shared: &SharedJobSnapshot) -> Result<String, 
                 .map_err(|error| format!("failed to create {}: {error}", parent.display()))?;
         }
 
-        let cozip =
-            init_extract_cozip(task.archive_format, &plan.zip_options, &plan.pdeflate_options)?;
-        let result = cozip
-            .decompress_auto_from_name_with_progress(
-                &task.archive_path,
-                &output_path,
-                Some(progress.clone()),
-            )
-            .map_err(|error| error.to_string());
+        let result = match task.archive_format {
+            ArchiveFormat::Zip | ArchiveFormat::Cozip => {
+                let cozip =
+                    init_extract_cozip(task.archive_format, &plan.zip_options, &plan.pdeflate_options)?;
+                cozip
+                    .decompress_auto_from_name_with_progress(
+                        &task.archive_path,
+                        &output_path,
+                        Some(progress.clone()),
+                    )
+                    .map_err(|error| error.to_string())
+            }
+            _ => cozip::extract_archive_from_name(&task.archive_path, &output_path)
+                .map_err(|error| error.to_string()),
+        };
         match result {
             Ok(_) => {
                 let mut state = shared.lock().expect("job snapshot poisoned");
@@ -186,6 +192,7 @@ fn init_compress_cozip(plan: &CompressPlan) -> Result<CoZip, String> {
         ArchiveFormat::Cozip => CoZipOptions::PDeflate {
             options: plan.pdeflate_options.clone(),
         },
+        _ => return Err("unsupported format for compression".to_string()),
     };
     CoZip::init(options).map_err(|error| error.to_string())
 }
@@ -202,7 +209,11 @@ fn init_extract_cozip(
         ArchiveFormat::Cozip => CoZipOptions::PDeflate {
             options: pdeflate_options.clone(),
         },
+        _ => CoZipOptions::Zip {
+            options: zip_options.clone(),
+        },
     };
+
     CoZip::init(options).map_err(|error| error.to_string())
 }
 

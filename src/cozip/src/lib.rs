@@ -359,7 +359,29 @@ pub enum CoZipOptions {
 pub enum CoZipArchiveFormat {
     Zip,
     PDeflate,
+    Tar,
+    TarGz,
+    TarBz2,
+    TarXz,
+    Rar,
+    SevenZip,
 }
+
+impl CoZipArchiveFormat {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Self::Zip => "zip",
+            Self::PDeflate => "cozip",
+            Self::Tar => "tar",
+            Self::TarGz => "tar.gz",
+            Self::TarBz2 => "tar.bz2",
+            Self::TarXz => "tar.xz",
+            Self::Rar => "rar",
+            Self::SevenZip => "7z",
+        }
+    }
+}
+
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum CoZipArchiveKind {
@@ -2654,6 +2676,70 @@ pub async fn decompress_directory_from_name_async<PIn: AsRef<Path>, POut: AsRef<
         .await
 }
 
+fn detect_archive_format<P: AsRef<Path>>(
+    input_path: P,
+    file: &mut StdFile,
+) -> Result<Option<CoZipArchiveFormat>, io::Error> {
+    let path = input_path.as_ref();
+    let mut header = [0_u8; 512];
+    file.seek(SeekFrom::Start(0))?;
+    let n = file.read(&mut header)?;
+    file.seek(SeekFrom::Start(0))?;
+
+    if n >= 2 && header[..2] == *b"PK" {
+        return Ok(Some(CoZipArchiveFormat::Zip));
+    }
+    if n >= 4 && (header[..4] == *b"PDS0" || header[..4] == PDEFLATE_DIR_FILE_MAGIC) {
+        return Ok(Some(CoZipArchiveFormat::PDeflate));
+    }
+    if n >= 6 && header[..6] == [0x37, 0x7a, 0xbc, 0xaf, 0x27, 0x1c] {
+        return Ok(Some(CoZipArchiveFormat::SevenZip));
+    }
+    if n >= 6 && header[..6] == *b"Rar!\x1a\x07" {
+        return Ok(Some(CoZipArchiveFormat::Rar));
+    }
+    if n >= 6 && header[..6] == [0xfd, 0x37, 0x7a, 0x58, 0x5a, 0x00] {
+        return Ok(Some(CoZipArchiveFormat::TarXz));
+    }
+    if n >= 3 && header[..3] == *b"BZh" {
+        return Ok(Some(CoZipArchiveFormat::TarBz2));
+    }
+    if n >= 2 && header[..2] == [0x1f, 0x8b] {
+        return Ok(Some(CoZipArchiveFormat::TarGz));
+    }
+
+    if n >= 262 && &header[257..262] == b"ustar" {
+        return Ok(Some(CoZipArchiveFormat::Tar));
+    }
+
+    let file_name = path
+        .file_name()
+        .and_then(|s| s.to_str())
+        .map(|s| s.to_lowercase())
+        .unwrap_or_default();
+
+    if file_name.ends_with(".tar.gz") || file_name.ends_with(".tgz") {
+        return Ok(Some(CoZipArchiveFormat::TarGz));
+    }
+    if file_name.ends_with(".tar.bz2") || file_name.ends_with(".tbz2") {
+        return Ok(Some(CoZipArchiveFormat::TarBz2));
+    }
+    if file_name.ends_with(".tar.xz") || file_name.ends_with(".txz") {
+        return Ok(Some(CoZipArchiveFormat::TarXz));
+    }
+    if file_name.ends_with(".tar") {
+        return Ok(Some(CoZipArchiveFormat::Tar));
+    }
+    if file_name.ends_with(".7z") {
+        return Ok(Some(CoZipArchiveFormat::SevenZip));
+    }
+    if file_name.ends_with(".rar") {
+        return Ok(Some(CoZipArchiveFormat::Rar));
+    }
+
+    Ok(None)
+}
+
 pub fn inspect_archive_from_name<P: AsRef<Path>>(
     input_path: P,
 ) -> Result<CoZipArchiveInfo, CoZipError> {
@@ -2663,90 +2749,253 @@ pub fn inspect_archive_from_name<P: AsRef<Path>>(
         input_path.display()
     ));
     let mut input = StdFile::open(input_path)?;
-    let mut magic = [0_u8; 4];
-    let read_len = input.read(&mut magic)?;
-    input.seek(SeekFrom::Start(0))?;
-    inspect_trace_log(format!(
-        "[inspect] magic path={} read_len={} magic={:02x?}",
-        input_path.display(),
-        read_len,
-        &magic[..read_len.min(magic.len())]
-    ));
 
-    if read_len >= 2 && magic[..2] == *b"PK" {
+    let detected_format = detect_archive_format(input_path, &mut input)?;
+    let Some(format) = detected_format else {
         inspect_trace_log(format!(
-            "[inspect] zip_signature path={}",
+            "[inspect] unsupported_signature path={}",
             input_path.display()
         ));
-        let kind = match inspect_zip_archive_kind(&input)? {
-            ZipArchiveKind::SingleFile { entry_name } => {
-                inspect_trace_log(format!(
-                    "[inspect] zip_kind path={} kind=single_file entry_name={}",
-                    input_path.display(),
-                    entry_name
-                ));
-                CoZipArchiveKind::SingleFile {
-                    suggested_name: entry_name,
-                }
-            }
-            ZipArchiveKind::Directory => {
-                inspect_trace_log(format!(
-                    "[inspect] zip_kind path={} kind=directory",
-                    input_path.display()
-                ));
-                CoZipArchiveKind::Directory
-            }
-        };
-        return Ok(CoZipArchiveInfo {
-            format: CoZipArchiveFormat::Zip,
-            kind,
-        });
-    }
+        return Err(CoZipError::InvalidZip("unsupported archive signature"));
+    };
 
-    if read_len == 4 && (magic == *b"PDS0" || magic == PDEFLATE_DIR_FILE_MAGIC) {
-        inspect_trace_log(format!(
-            "[inspect] pdeflate_signature path={}",
-            input_path.display()
-        ));
-        let is_directory = inspect_pdeflate_directory_header(&input)?.is_some();
-        input.seek(SeekFrom::Start(0))?;
-        let kind = if is_directory {
+    match format {
+        CoZipArchiveFormat::Zip => {
             inspect_trace_log(format!(
-                "[inspect] pdeflate_kind path={} kind=directory",
+                "[inspect] zip_signature path={}",
                 input_path.display()
             ));
-            CoZipArchiveKind::Directory
-        } else {
-            let suggested_name = pdeflate_stream_suggested_name(&mut input)
-                .ok()
-                .flatten()
-                .or_else(|| {
-                    input_path
-                        .file_stem()
-                        .and_then(|stem| stem.to_str())
-                        .filter(|stem| !stem.is_empty())
-                        .map(str::to_string)
-                })
-                .unwrap_or_else(|| DEFAULT_ENTRY_NAME.to_string());
+            let kind = match inspect_zip_archive_kind(&input)? {
+                ZipArchiveKind::SingleFile { entry_name } => {
+                    CoZipArchiveKind::SingleFile {
+                        suggested_name: entry_name,
+                    }
+                }
+                ZipArchiveKind::Directory => CoZipArchiveKind::Directory,
+            };
+            Ok(CoZipArchiveInfo {
+                format: CoZipArchiveFormat::Zip,
+                kind,
+            })
+        }
+        CoZipArchiveFormat::PDeflate => {
             inspect_trace_log(format!(
-                "[inspect] pdeflate_kind path={} kind=single_file suggested_name={}",
-                input_path.display(),
-                suggested_name
+                "[inspect] pdeflate_signature path={}",
+                input_path.display()
             ));
-            CoZipArchiveKind::SingleFile { suggested_name }
-        };
-        return Ok(CoZipArchiveInfo {
-            format: CoZipArchiveFormat::PDeflate,
-            kind,
-        });
+            let is_directory = inspect_pdeflate_directory_header(&input)?.is_some();
+            input.seek(SeekFrom::Start(0))?;
+            let kind = if is_directory {
+                CoZipArchiveKind::Directory
+            } else {
+                let suggested_name = pdeflate_stream_suggested_name(&mut input)
+                    .ok()
+                    .flatten()
+                    .or_else(|| {
+                        input_path
+                            .file_stem()
+                            .and_then(|stem| stem.to_str())
+                            .filter(|stem| !stem.is_empty())
+                            .map(str::to_string)
+                    })
+                    .unwrap_or_else(|| DEFAULT_ENTRY_NAME.to_string());
+                CoZipArchiveKind::SingleFile { suggested_name }
+            };
+            Ok(CoZipArchiveInfo {
+                format: CoZipArchiveFormat::PDeflate,
+                kind,
+            })
+        }
+        format => {
+            inspect_trace_log(format!(
+                "[inspect] multi_format_signature path={} format={:?}",
+                input_path.display(),
+                format
+            ));
+            Ok(CoZipArchiveInfo {
+                format,
+                kind: CoZipArchiveKind::Directory,
+            })
+        }
+    }
+}
+
+pub fn extract_archive_from_name<PIn: AsRef<Path>, POut: AsRef<Path>>(
+    archive_path: PIn,
+    output_dir: POut,
+) -> Result<CoZipStats, CoZipError> {
+    let archive_path = archive_path.as_ref();
+    let output_dir = output_dir.as_ref();
+
+    let info = inspect_archive_from_name(archive_path)?;
+    match info.format {
+        CoZipArchiveFormat::Zip => {
+            let zip = CoZip::init(CoZipOptions::Zip {
+                options: ZipOptions::default(),
+            })?;
+            zip.decompress_auto_from_name(archive_path, output_dir)
+        }
+        CoZipArchiveFormat::PDeflate => {
+            let cozip = CoZip::init(CoZipOptions::PDeflate {
+                options: PDeflateOptions::default(),
+            })?;
+            match info.kind {
+                CoZipArchiveKind::Directory => {
+                    cozip.decompress_directory_from_name(archive_path, output_dir)
+                }
+                CoZipArchiveKind::SingleFile { .. } => {
+                    cozip.decompress_file_from_name(archive_path, output_dir)
+                }
+            }
+        }
+
+        CoZipArchiveFormat::Tar => {
+            let file = StdFile::open(archive_path)?;
+            extract_tar_archive(file, output_dir)
+        }
+        CoZipArchiveFormat::TarGz => {
+            let file = StdFile::open(archive_path)?;
+            let gz = flate2::read::GzDecoder::new(file);
+            extract_tar_archive(gz, output_dir)
+        }
+        CoZipArchiveFormat::TarBz2 => {
+            let file = StdFile::open(archive_path)?;
+            let bz = bzip2::read::BzDecoder::new(file);
+            extract_tar_archive(bz, output_dir)
+        }
+        CoZipArchiveFormat::TarXz => {
+            let file = StdFile::open(archive_path)?;
+            let xz = xz2::read::XzDecoder::new(file);
+            extract_tar_archive(xz, output_dir)
+        }
+        CoZipArchiveFormat::SevenZip => extract_sevenz_archive(archive_path, output_dir),
+        CoZipArchiveFormat::Rar => extract_rar_archive(archive_path, output_dir),
+    }
+}
+
+fn extract_tar_archive<R: Read>(reader: R, output_dir: &Path) -> Result<CoZipStats, CoZipError> {
+    let mut archive = tar::Archive::new(reader);
+    let mut total_uncompressed_bytes = 0_u64;
+    let mut entry_count = 0_usize;
+
+    let entries = archive
+        .entries()
+        .map_err(|e| io::Error::other(format!("tar read error: {e}")))?;
+
+    for entry_res in entries {
+        let mut entry = entry_res.map_err(|e| io::Error::other(format!("tar entry error: {e}")))?;
+        let path = entry
+            .path()
+            .map_err(|e| io::Error::other(format!("tar path error: {e}")))?
+            .to_path_buf();
+
+        let mut out_path = output_dir.to_path_buf();
+        for component in path.components() {
+            match component {
+                Component::Normal(c) => out_path.push(c),
+                Component::ParentDir | Component::RootDir | Component::Prefix(_) => {
+                    return Err(io::Error::other(format!(
+                        "illegal path component in tar: {}",
+                        path.display()
+                    ))
+                    .into());
+                }
+                Component::CurDir => {}
+            }
+        }
+
+        if entry.header().entry_type().is_dir() {
+            std::fs::create_dir_all(&out_path)?;
+            entry_count += 1;
+        } else {
+            if let Some(parent) = out_path.parent() {
+                std::fs::create_dir_all(parent)?;
+            }
+            let mut out_file = StdFile::create(&out_path)?;
+            let written = std::io::copy(&mut entry, &mut out_file)?;
+            total_uncompressed_bytes += written;
+            entry_count += 1;
+        }
     }
 
-    inspect_trace_log(format!(
-        "[inspect] unsupported_signature path={}",
-        input_path.display()
-    ));
-    Err(CoZipError::InvalidZip("unsupported archive signature"))
+    Ok(CoZipStats {
+        entries: entry_count,
+        input_bytes: total_uncompressed_bytes,
+        output_bytes: total_uncompressed_bytes,
+    })
 }
+
+fn extract_sevenz_archive(archive_path: &Path, output_dir: &Path) -> Result<CoZipStats, CoZipError> {
+    sevenz_rust::decompress_file(archive_path, output_dir)
+        .map_err(|e| io::Error::other(format!("7z extraction error: {e}")))?;
+
+    let mut entry_count = 0;
+    if let Ok(entries) = std::fs::read_dir(output_dir) {
+        for _ in entries {
+            entry_count += 1;
+        }
+    }
+
+    Ok(CoZipStats {
+        entries: entry_count,
+        input_bytes: 0,
+        output_bytes: 0,
+    })
+}
+
+fn extract_rar_archive(archive_path: &Path, output_dir: &Path) -> Result<CoZipStats, CoZipError> {
+    let mut archive = unrar::Archive::new(archive_path)
+        .open_for_processing()
+        .map_err(|e| io::Error::other(format!("rar open error: {e}")))?;
+
+    let mut entry_count = 0;
+    let mut total_bytes = 0;
+
+    while let Some(header) = archive
+        .read_header()
+        .map_err(|e| io::Error::other(format!("rar header error: {e}")))?
+    {
+        let is_dir = header.entry().is_directory();
+        if is_dir {
+            archive = header
+                .skip()
+                .map_err(|e| io::Error::other(format!("rar skip error: {e}")))?;
+            entry_count += 1;
+        } else {
+            let file_name = header.entry().filename.clone();
+            let mut out_path = output_dir.to_path_buf();
+            for component in Path::new(&file_name).components() {
+                match component {
+                    Component::Normal(c) => out_path.push(c),
+                    Component::ParentDir | Component::RootDir | Component::Prefix(_) => {
+                        return Err(io::Error::other(format!(
+                            "illegal path in rar: {}",
+                            file_name.display()
+                        ))
+                        .into());
+                    }
+                    Component::CurDir => {}
+                }
+            }
+            if let Some(parent) = out_path.parent() {
+                std::fs::create_dir_all(parent)?;
+            }
+            total_bytes += header.entry().unpacked_size as u64;
+            archive = header
+                .extract_to(&out_path)
+                .map_err(|e| io::Error::other(format!("rar extract error: {e}")))?;
+            entry_count += 1;
+        }
+    }
+
+    Ok(CoZipStats {
+        entries: entry_count,
+        input_bytes: total_bytes,
+        output_bytes: total_bytes,
+    })
+}
+
+
 
 pub fn inspect_archive_decode_hint_from_name<P: AsRef<Path>>(
     input_path: P,
@@ -5484,6 +5733,49 @@ mod tests {
     use super::*;
 
     fn assert_sync_send<T: Sync + Send>() {}
+
+    #[test]
+    fn test_archive_format_variants() {
+        assert_eq!(CoZipArchiveFormat::Zip.as_str(), "zip");
+        assert_eq!(CoZipArchiveFormat::PDeflate.as_str(), "cozip");
+        assert_eq!(CoZipArchiveFormat::Tar.as_str(), "tar");
+        assert_eq!(CoZipArchiveFormat::TarGz.as_str(), "tar.gz");
+        assert_eq!(CoZipArchiveFormat::TarBz2.as_str(), "tar.bz2");
+        assert_eq!(CoZipArchiveFormat::TarXz.as_str(), "tar.xz");
+        assert_eq!(CoZipArchiveFormat::Rar.as_str(), "rar");
+        assert_eq!(CoZipArchiveFormat::SevenZip.as_str(), "7z");
+    }
+
+    #[test]
+    fn test_inspect_archive_multi_format() {
+        let temp = std::env::temp_dir();
+
+        let tar_gz_path = temp.join(format!("test_sample_{}.tar.gz", std::process::id()));
+        {
+            let file = StdFile::create(&tar_gz_path).unwrap();
+            let mut gz = flate2::write::GzEncoder::new(file, flate2::Compression::default());
+            let mut tar = tar::Builder::new(&mut gz);
+            let mut header = tar::Header::new_gnu();
+            header.set_size(12);
+            header.set_mode(0o644);
+            header.set_cksum();
+            tar.append_data(&mut header, "hello.txt", &b"hello tar.gz"[..]).unwrap();
+            tar.finish().unwrap();
+        }
+
+        let info = inspect_archive_from_name(&tar_gz_path).expect("inspect tar.gz");
+        assert_eq!(info.format, CoZipArchiveFormat::TarGz);
+
+        let out_dir = temp.join(format!("test_tar_gz_out_{}", std::process::id()));
+        let stats = extract_archive_from_name(&tar_gz_path, &out_dir).expect("extract tar.gz");
+        assert!(stats.entries >= 1);
+        assert_eq!(std::fs::read_to_string(out_dir.join("hello.txt")).unwrap(), "hello tar.gz");
+
+
+        let _ = std::fs::remove_file(&tar_gz_path);
+        let _ = std::fs::remove_dir_all(&out_dir);
+    }
+
 
     #[test]
     fn zip_single_roundtrip() {

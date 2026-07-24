@@ -2,7 +2,7 @@
 Type=Service
 Name=CoZip 10 Extract Here
 Name[ja]=CoZip 10 ここに展開
-MimeType=application/zip;application/x-cozip;application/x-zip-compressed;application/x-zip;
+MimeType=application/zip;application/x-cozip;application/x-zip-compressed;application/x-zip;application/x-rar;application/x-rar-compressed;application/x-7z-compressed;application/x-tar;application/gzip;application/x-gzip;application/x-bzip2;application/x-xz;
 Actions=cozip-10-extract-here;
 X-KDE-Submenu=Extract
 X-KDE-Submenu[ja]=展開
