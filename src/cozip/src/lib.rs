@@ -1,4 +1,6 @@
 use std::collections::{BTreeMap, VecDeque};
+use std::convert::{TryFrom, TryInto};
+
 use std::env;
 use std::ffi::OsStr;
 use std::fs::{File as StdFile, OpenOptions};
@@ -772,6 +774,8 @@ pub enum CoZipError {
 }
 
 pub type CozipZipError = CoZipError;
+
+
 
 #[derive(Debug, Clone)]
 pub struct CoZip {
