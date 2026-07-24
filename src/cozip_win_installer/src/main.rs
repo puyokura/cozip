@@ -640,6 +640,22 @@ fn simple_progress_bar(progress: u8) -> impl IntoElement {
         )
 }
 
+fn find_local_pack_zip() -> Option<PathBuf> {
+    if let Ok(exe) = std::env::current_exe() {
+        if let Some(dir) = exe.parent() {
+            let candidate = dir.join("pack.zip");
+            if candidate.exists() {
+                return Some(candidate);
+            }
+        }
+    }
+    let candidate = PathBuf::from("pack.zip");
+    if candidate.exists() {
+        return Some(candidate);
+    }
+    None
+}
+
 fn perform_install(
     add_explorer_menu: bool,
     mut on_progress: impl FnMut(u8),
@@ -654,22 +670,28 @@ fn perform_install(
 
     report_progress(1);
 
-    let client = Client::builder()
-        .timeout(Duration::from_secs(120))
-        .build()
-        .map_err(|error| format!("failed to initialize http client: {error}"))?;
-    let asset = fetch_latest_release_asset(&client)?;
+    let (zip_path, should_cleanup) = if let Some(local_pack) = find_local_pack_zip() {
+        report_progress(DOWNLOAD_PROGRESS_END);
+        (local_pack, false)
+    } else {
+        let client = Client::builder()
+            .timeout(Duration::from_secs(120))
+            .build()
+            .map_err(|error| format!("failed to initialize http client: {error}"))?;
+        let asset = fetch_latest_release_asset(&client)?;
 
-    let temp_zip_path = installer_temp_zip_path();
-    let download_result = download_release_asset(&client, &asset, &temp_zip_path, |written, total| {
-        report_progress(scale_progress(5, DOWNLOAD_PROGRESS_END, written, total));
-    });
-    if let Err(error) = download_result {
-        let _ = fs::remove_file(&temp_zip_path);
-        return Err(error);
-    }
+        let temp_zip_path = installer_temp_zip_path();
+        let download_result = download_release_asset(&client, &asset, &temp_zip_path, |written, total| {
+            report_progress(scale_progress(5, DOWNLOAD_PROGRESS_END, written, total));
+        });
+        if let Err(error) = download_result {
+            let _ = fs::remove_file(&temp_zip_path);
+            return Err(error);
+        }
+        (temp_zip_path, true)
+    };
 
-    let extract_result = extract_pack_archive(&temp_zip_path, Path::new(INSTALL_DIR), |written, total| {
+    let extract_result = extract_pack_archive(&zip_path, Path::new(INSTALL_DIR), |written, total| {
         report_progress(scale_progress(
             DOWNLOAD_PROGRESS_END + 1,
             EXTRACT_PROGRESS_END,
@@ -677,8 +699,11 @@ fn perform_install(
             total,
         ));
     });
-    let _ = fs::remove_file(&temp_zip_path);
+    if should_cleanup {
+        let _ = fs::remove_file(&zip_path);
+    }
     extract_result?;
+
 
     let shell_extension_note = install_shell_extension_binaries()?;
 
