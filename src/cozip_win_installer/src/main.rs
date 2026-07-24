@@ -33,6 +33,8 @@ use windows_sys::Win32::Storage::FileSystem::{
     MOVEFILE_DELAY_UNTIL_REBOOT, MOVEFILE_REPLACE_EXISTING, MoveFileExW,
 };
 #[cfg(target_os = "windows")]
+use windows_sys::Win32::System::Com::{CoInitializeEx, COINIT_APARTMENTTHREADED};
+#[cfg(target_os = "windows")]
 use windows_sys::Win32::System::LibraryLoader::{GetProcAddress, LoadLibraryW};
 #[cfg(target_os = "windows")]
 use windows_sys::Win32::System::Registry::{
@@ -43,6 +45,11 @@ use windows_sys::Win32::System::Registry::{
 use windows_sys::Win32::System::Threading::{GetCurrentProcess, OpenProcessToken};
 #[cfg(target_os = "windows")]
 use windows_sys::Win32::UI::Shell::ShellExecuteW;
+#[cfg(target_os = "windows")]
+use windows_sys::Win32::UI::WindowsAndMessaging::{
+    MessageBoxW, IDYES, MB_ICONERROR, MB_ICONINFORMATION, MB_OK, MB_YESNO,
+};
+
 
 const INSTALL_DIR: &str = r"C:\Program Files\CoZip";
 const COZIP_DESKTOP_EXE_PATH: &str = r"C:\Program Files\CoZip\cozip_desktop.exe";
@@ -1259,7 +1266,65 @@ fn quote_windows_arg(arg: &OsStr) -> String {
     quoted
 }
 
+#[cfg(target_os = "windows")]
+fn run_native_win32_fallback_installer() {
+    let title = to_wide(OsStr::new("CoZip インストーラー"));
+    let prompt = to_wide(OsStr::new(
+        "CoZip を C:\\Program Files\\CoZip にインストールしますか？",
+    ));
+    let choice = unsafe {
+        MessageBoxW(
+            0 as HWND,
+            prompt.as_ptr(),
+            title.as_ptr(),
+            MB_YESNO | MB_ICONINFORMATION,
+        )
+    };
+    if choice != IDYES {
+        return;
+    }
+
+    match perform_install(true, |_| {}) {
+        Ok(note) => {
+            let msg = if let Some(n) = note {
+                format!("CoZip のインストールが完了しました！\n\n{n}")
+            } else {
+                "CoZip のインストールが完了しました！".to_string()
+            };
+            let msg_wide = to_wide(OsStr::new(&msg));
+            unsafe {
+                MessageBoxW(
+                    0 as HWND,
+                    msg_wide.as_ptr(),
+                    title.as_ptr(),
+                    MB_OK | MB_ICONINFORMATION,
+                );
+            }
+        }
+        Err(err) => {
+            let err_title = to_wide(OsStr::new("CoZip インストールエラー"));
+            let err_msg = to_wide(OsStr::new(&err));
+            unsafe {
+                MessageBoxW(
+                    0 as HWND,
+                    err_msg.as_ptr(),
+                    err_title.as_ptr(),
+                    MB_OK | MB_ICONERROR,
+                );
+            }
+        }
+    }
+}
+
+#[cfg(not(target_os = "windows"))]
+fn run_native_win32_fallback_installer() {}
+
 fn main() {
+    #[cfg(target_os = "windows")]
+    unsafe {
+        CoInitializeEx(std::ptr::null_mut(), COINIT_APARTMENTTHREADED as u32);
+    }
+
     #[cfg(target_os = "windows")]
     if let Err(error) = ensure_elevated() {
         eprintln!("failed to elevate installer: {error}");
@@ -1268,21 +1333,29 @@ fn main() {
 
     let i18n = I18n::load();
 
-    Application::new().run(move |cx: &mut App| {
-        let bounds = Bounds::centered(None, size(px(720.0), px(560.0)), cx);
-        let i18n = i18n.clone();
-        cx.open_window(
-            WindowOptions {
-                window_bounds: Some(WindowBounds::Windowed(bounds)),
-                titlebar: Some(Default::default()),
-                window_background: WindowBackgroundAppearance::Opaque,
-                window_min_size: Some(size(px(680.0), px(520.0))),
-                app_id: Some("cozip-installer".to_string()),
-                ..Default::default()
-            },
-            move |_, cx| cx.new(|_| InstallerApp::new(i18n.clone())),
-        )
-        .expect("failed to open installer window");
-        cx.activate(true);
+    let res = std::panic::catch_unwind(move || {
+        Application::new().run(move |cx: &mut App| {
+            let bounds = Bounds::centered(None, size(px(720.0), px(560.0)), cx);
+            let i18n = i18n.clone();
+            cx.open_window(
+                WindowOptions {
+                    window_bounds: Some(WindowBounds::Windowed(bounds)),
+                    titlebar: Some(Default::default()),
+                    window_background: WindowBackgroundAppearance::Opaque,
+                    window_min_size: Some(size(px(680.0), px(520.0))),
+                    app_id: Some("cozip-installer".to_string()),
+                    ..Default::default()
+                },
+                move |_, cx| cx.new(|_| InstallerApp::new(i18n.clone())),
+            )
+            .expect("failed to open installer window");
+            cx.activate(true);
+        });
     });
+
+    if res.is_err() {
+        eprintln!("GPUI window failed to launch, using native Win32 installer fallback");
+        run_native_win32_fallback_installer();
+    }
 }
+
